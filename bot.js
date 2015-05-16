@@ -23,12 +23,10 @@ function queueTexts() {
 			else {
 				data.messages.forEach(function(message) { 
 					if (message.direction == 'inbound'){
-						console.log(message.sid, message.body, message.date_sent); 
-
 						var isDisplayedPromise = isAlreadyDisplayed(message);
 						isDisplayedPromise.done(function(result){
 							if(result.toQueue){//text not found! queue it up!
-								textQueue_db.insert({id: message.sid, message:message.body, created_at: message.date_sent});
+								textQueue_db.insert({id: message.sid, message:message.body, created_at: new Date(message.date_sent)});
 								console.log("queueing ", message.body);
 							}
 						});
