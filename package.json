@@ -4,8 +4,8 @@
   "description": "A bot to find tweets to display",
   "main": "bot.js",
   "dependencies": {
-    "nedb": "^1.1.1",
-    "q": "^1.1.2",
+    "nedb": "^1.1.2",
+    "q": "^1.4.0",
     "restler": "^3.2.2",
     "twit": "^1.1.19"
   },

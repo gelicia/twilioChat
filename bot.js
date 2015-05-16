@@ -6,17 +6,16 @@ var sparkConfig = require('./sparkConfig.js');
 var twilioConfig = require('./twilioConfig.js');
 
 var textQueue_db = new Datastore({filename: './textQueue.db', autoload:true});
-var displayQueue_db = new Datastore({filename: './displayQueue.db', autoload:true});
 var displayedTexts_db = new Datastore({filename: './displayedTexts.db', autoload:true});
 
 //how many times it will try to send everything to the spark before giving up
  var sparkErrorThreshhold = 3;
 
-var twiloClient = require('twilio')(twiloConfig.accountSid, twiloConfig.authToken); 
+var twilioClient = require('twilio')(twilioConfig.accountSid, twilioConfig.authToken); 
 
 function queueTexts() {
 	//todo go back two days
-	twiloClient.messages.list({'DateSent>':'2015-05-01'},     
+	twilioClient.messages.list({'DateSent>':'2015-05-01'},     
 		function(err, data) { 
 			if (err !== null){
 				console.log(err);
@@ -29,9 +28,8 @@ function queueTexts() {
 						var isDisplayedPromise = isAlreadyDisplayed(message);
 						isDisplayedPromise.done(function(result){
 							if(result.toQueue){//text not found! queue it up!
-								var queueText = processTextData(result.data);					
-								textQueue_db.insert(queueText);
-								console.log("queueing ", queueText.message);
+								textQueue_db.insert({id: message.sid, message:message.body, created_at: message.date_sent});
+								console.log("queueing ", message.body);
 							}
 						});
 					}
@@ -40,26 +38,6 @@ function queueTexts() {
 		}
 	);
 		
-}
-
-function processTextData(textData){
-	var queuedMessage = "@" + textData.user.screen_name + " - ";
-	
-	//If the message begins with the name of who it was a reply to, remove that name from the string
-	if (!showBeginningName && (textData.text).indexOf(textData.in_reply_to_screen_name) == 1){
-		queuedMessage = queuedMessage + (textData.text).substring(textData.in_reply_to_screen_name.length+2);
-	}
-	else { //otherwise, just display the text
-		queuedMessage = queuedMessage + textData.text;
-	}
-
-	var queueText = {
-		"id" : textData.id,
-		created_at: new Date(textData.created_at),
-		message : queuedMessage
-	};
-
-	return queueText;
 }
 
 function isTextQueued(textData){
@@ -80,25 +58,6 @@ function isTextQueued(textData){
 	return deferred.promise;
 }
 
-function isDisplayQueued(textData){
-	var deferred = q.defer();
-	displayQueue_db.loadDatabase();
-	displayQueue_db.findOne({id : textData.sid}, function (err, doc) {
-		if (err){ //if theres an error, just let it check next time
-			deferred.resolve(true);
-		}
-		else if (doc === null){ //if nothing was found, return false
-			deferred.resolve(false);
-		}
-		else { // otherwise return true
-			deferred.resolve(true);
-		}
-	});
-	
-	return deferred.promise;
-
-}
-
 function isAlreadyDisplayed(textData){
 	var deferred = q.defer();
 
@@ -108,27 +67,19 @@ function isAlreadyDisplayed(textData){
 			deferred.resolve({toQueue: false, data:textData});
 		}
 		else{
-			var isDisplayQueuedPromise = isDisplayQueued(textData);
-			isDisplayQueuedPromise.done(function(isDisplayQueuedRes){
-				if(isDisplayQueuedRes){
+			displayedTexts_db.loadDatabase();
+			displayedTexts_db.findOne({id : textData.sid}, function (err, doc) {
+				if (err){ //if theres an error, just let it check next time
 					deferred.resolve({toQueue: false, data:textData});
 				}
-				else{
-					displayedTexts_db.loadDatabase();
-					displayedTexts_db.findOne({id : textData.sid}, function (err, doc) {
-						if (err){ //if theres an error, just let it check next time
-							deferred.resolve({toQueue: false, data:textData});
-						}
-						else if (doc === null){ //value not found, queue up
-							deferred.resolve({toQueue: true, data:textData});
-						}
-						else { //value found, do not queue it up
-							deferred.resolve({toQueue: false, data:textData});
-						}
-					});
+				else if (doc === null){ //value not found, queue up
+					deferred.resolve({toQueue: true, data:textData});
+				}
+				else { //value found, do not queue it up
+					deferred.resolve({toQueue: false, data:textData});
 				}
 			});
-		}
+		}	
 	});
 
 	return deferred.promise;
@@ -137,7 +88,7 @@ function isAlreadyDisplayed(textData){
  function getLeastRecentText(){
  	var deferred = q.defer();
 
- 	displayQueue_db.findOne({}).sort({ created_at: 1 }).exec(function (err, doc) {
+ 	textQueue_db.findOne({}).sort({ created_at: 1 }).exec(function (err, doc) {
   		deferred.resolve(doc);
 	});
 
@@ -145,20 +96,20 @@ function isAlreadyDisplayed(textData){
  }
 
  function incrementErrorCount(text){
- 	displayQueue_db.update({ id: text.id }, { $inc: {errorCount: 1}});
+ 	textQueue_db.update({ id: text.id }, { $inc: {errorCount: 1}});
  }
 
  function displayText(){
  	console.log("looking to display texts");
 
-	displayQueue_db.loadDatabase();
- 	displayQueue_db.count({}, function (err, count) {
+	textQueue_db.loadDatabase();
+ 	textQueue_db.count({}, function (err, count) {
 	  if (count > 0){
 		getLeastRecentText().done(function(textOfInterest){
 			if (textOfInterest.errorCount && textOfInterest.errorCount >= (sparkErrorThreshhold-1)){
 				//too many errors, send to displayed
 				displayedTexts_db.insert({id: textOfInterest.id, message: "Error: " +  textOfInterest.message, displayed_at: new Date(), displayed: false, errored: true});
-				displayQueue_db.remove({id: textOfInterest.id}, {multi: true});
+				textQueue_db.remove({id: textOfInterest.id}, {multi: true});
 			}
 			else {
 				sendMessage(1,{message: "BEGIN"}).done(function(){
@@ -169,7 +120,6 @@ function isAlreadyDisplayed(textData){
 					formatMessage = formatMessage.replace(/”/g, '"');
 					formatMessage = formatMessage.replace(/‘/g, '\'');
 					formatMessage = formatMessage.replace(/’/g, '\'');
-
 					formatMessage = formatMessage.replace(/&amp;/g, '%26');
 
 					var msgsNeeded = Math.ceil(formatMessage.length/61);
@@ -208,7 +158,6 @@ function isAlreadyDisplayed(textData){
 			}
 		});
 	  }
-
 	});
 }
 
@@ -228,7 +177,7 @@ function sendMessage(adminFlag, messageData, rootMsg){
 			if (adminFlag == 1 && messageData.message == "END"){
 				//only put the id in the displayed db if sending to the spark doesn't fail
 				displayedTexts_db.insert({id: messageData.id, message: rootMsg, displayed_at: new Date(), displayed: true});
-				displayQueue_db.remove({id: messageData.id}, {multi: true});
+				textQueue_db.remove({id: messageData.id}, {multi: true});
 				console.log("display done");
 			}
 			deferred.resolve();
